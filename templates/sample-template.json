@@ -1,0 +1,104 @@
+{
+  "schemaVersion": 1,
+  "name": "sample-two-page-cover",
+  "source": {
+    "type": "ppt",
+    "defaultRatio": "16:9"
+  },
+  "maxOutputs": 18,
+  "batchRule": {
+    "sourceOutputIndex": 1,
+    "count": 1,
+    "pageStep": 2,
+    "createdAt": "2026-04-28T00:00:00.000Z"
+  },
+  "outputs": [
+    {
+      "index": 1,
+      "name": "图 1",
+      "canvas": {
+        "ratio": "3:4",
+        "width": 1080,
+        "height": 1440
+      },
+      "background": {
+        "type": "ppt_page",
+        "page": 1,
+        "fit": "cover",
+        "blur": 24,
+        "opacity": 0.45,
+        "overlay": {
+          "enabled": true,
+          "color": "#f3efe7",
+          "opacity": 0.55
+        }
+      },
+      "frames": [
+        {
+          "id": "frame_top",
+          "type": "ppt_page",
+          "page": 1,
+          "x": 90,
+          "y": 150,
+          "w": 900,
+          "h": 506,
+          "sourceRatio": "16:9",
+          "fit": "contain",
+          "opacity": 1,
+          "feather": 0,
+          "blendMode": "normal",
+          "radius": 24,
+          "shadow": {
+            "enabled": true,
+            "x": 0,
+            "y": 16,
+            "blur": 34,
+            "color": "#000000",
+            "opacity": 0.18
+          },
+          "border": {
+            "enabled": false,
+            "width": 0,
+            "color": "#ffffff",
+            "opacity": 1
+          }
+        },
+        {
+          "id": "frame_bottom",
+          "type": "ppt_page",
+          "page": 2,
+          "x": 90,
+          "y": 760,
+          "w": 900,
+          "h": 506,
+          "sourceRatio": "16:9",
+          "fit": "cover",
+          "opacity": 1,
+          "feather": 0,
+          "blendMode": "normal",
+          "radius": 24,
+          "shadow": {
+            "enabled": true,
+            "x": 0,
+            "y": 16,
+            "blur": 34,
+            "color": "#000000",
+            "opacity": 0.18
+          },
+          "border": {
+            "enabled": false,
+            "width": 0,
+            "color": "#ffffff",
+            "opacity": 1
+          }
+        }
+      ]
+    }
+  ],
+  "assets": [],
+  "metadata": {
+    "createdAt": "2026-04-28T00:00:00.000Z",
+    "updatedAt": "2026-04-28T00:00:00.000Z",
+    "createdBy": "template-studio"
+  }
+}
