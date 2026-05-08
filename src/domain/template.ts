@@ -1,4 +1,4 @@
-import { templatePackageSchema, type CanvasOutput, type CanvasRatio, type PptFrameConfig, type TemplatePackage } from '../schema/template.schema';
+import { templatePackageSchema, type CanvasOutput, type CanvasRatio, type PptFrameConfig, type TemplatePackage, type TextBlockConfig } from '../schema/template.schema';
 
 export const MAX_OUTPUTS = 18;
 export const PPT_RATIO = 16 / 9;
@@ -40,6 +40,7 @@ export function createCanvasOutput(index = 1, ratio: CanvasRatio = '3:4'): Canva
       color: '#f3efe7',
     },
     frames: [],
+    textBlocks: [],
   };
 }
 
@@ -106,6 +107,37 @@ export function addFrameToOutput(output: CanvasOutput) {
   };
 }
 
+export function createTextBlock(x = 90, y = 84, w = 900): TextBlockConfig {
+  return {
+    id: makeId('text'),
+    type: 'fixed_text',
+    text: '把课堂讲到心里',
+    x,
+    y,
+    w,
+    fontSize: 64,
+    fontFamily: 'PingFang SC, Noto Sans SC, Source Han Sans SC, Microsoft YaHei, sans-serif',
+    fontWeight: '900',
+    textColor: '#ffffff',
+    backgroundColor: '#0b4f71',
+    backgroundOpacity: 0.82,
+    padding: 28,
+    radius: 24,
+    opacity: 1,
+  };
+}
+
+export function addTextBlockToOutput(output: CanvasOutput) {
+  const textBlock = createTextBlock();
+  return {
+    textBlock,
+    output: {
+      ...output,
+      textBlocks: [...(output.textBlocks ?? []), textBlock],
+    },
+  };
+}
+
 export function getNextFramePlacement(output: CanvasOutput): [x: number, y: number, w: number] {
   const width = Math.min(DEFAULT_FRAME_W, output.canvas.width - DEFAULT_FRAME_X * 2);
   const height = Math.round(width / PPT_RATIO);
@@ -132,6 +164,10 @@ export function duplicateOutput(output: CanvasOutput, index: number, pageOffset:
       ...frame,
       id: makeId('frame'),
       page: Math.max(1, frame.page + pageOffset),
+    })),
+    textBlocks: (output.textBlocks ?? []).map((textBlock) => ({
+      ...textBlock,
+      id: makeId('text'),
     })),
   };
 }

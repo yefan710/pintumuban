@@ -28,7 +28,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -308,13 +309,20 @@ button:disabled {
 }
 
 .control-stack input,
-.control-stack select {
+.control-stack select,
+.control-stack textarea {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--white);
   color: var(--ink);
   padding: 8px 10px;
+}
+
+.control-stack textarea {
+  min-height: 86px;
+  resize: vertical;
+  line-height: 20px;
 }
 
 .control-stack input[type="range"] {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createFrame, createTemplateGroup } from '../domain/template';
+import { createFrame, createTemplateGroup, createTextBlock } from '../domain/template';
 import { templatePackageSchema } from './template.schema';
 
 describe('templatePackageSchema', () => {
@@ -32,6 +32,12 @@ describe('templatePackageSchema', () => {
     const template = createTemplateGroup();
     template.outputs[0].frames = [{ ...createFrame(1), page: 0 }];
     expect(templatePackageSchema.safeParse(template).success).toBe(false);
+  });
+
+  it('accepts fixed art text blocks', () => {
+    const template = createTemplateGroup();
+    template.outputs[0].textBlocks = [createTextBlock()];
+    expect(templatePackageSchema.safeParse(template).success).toBe(true);
   });
 
   it('accepts a PPT page as a dynamic background source', () => {

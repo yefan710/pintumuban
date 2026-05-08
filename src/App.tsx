@@ -6,6 +6,7 @@ import { Group, Image as KonvaImage, Layer, Rect, Stage, Text, Transformer } fro
 import './App.css';
 import {
   addFrameToOutput,
+  addTextBlockToOutput,
   batchDuplicateOutput,
   createTemplateGroup,
   duplicateOutput,
@@ -22,6 +23,7 @@ import type {
   FitMode,
   PptFrameConfig,
   TemplatePackage,
+  TextBlockConfig,
 } from './schema/template.schema';
 
 type AssetData = Record<string, string>;
@@ -313,6 +315,97 @@ function PptFrameNode({
   );
 }
 
+function TextBlockNode({
+  block,
+  isSelected,
+  onChange,
+  onSelect,
+}: {
+  block: TextBlockConfig;
+  isSelected: boolean;
+  onChange: (block: TextBlockConfig) => void;
+  onSelect: () => void;
+}) {
+  const rectRef = useRef<Konva.Rect>(null);
+  const transformerRef = useRef<Konva.Transformer>(null);
+  const lineHeight = block.fontSize * 1.16;
+  const estimatedLines = Math.max(1, Math.ceil(block.text.length / Math.max(1, Math.floor(block.w / (block.fontSize * 0.9)))));
+  const height = Math.round(block.padding * 2 + estimatedLines * lineHeight);
+
+  useEffect(() => {
+    if (isSelected && rectRef.current && transformerRef.current) {
+      transformerRef.current.nodes([rectRef.current]);
+      transformerRef.current.getLayer()?.batchDraw();
+    }
+  }, [isSelected]);
+
+  return (
+    <>
+      <Rect
+        ref={rectRef}
+        x={block.x}
+        y={block.y}
+        width={block.w}
+        height={height}
+        fill={block.backgroundColor}
+        opacity={block.backgroundOpacity * block.opacity}
+        cornerRadius={block.radius}
+        stroke={isSelected ? '#00a6a6' : undefined}
+        strokeWidth={isSelected ? 3 : 0}
+        draggable
+        onClick={onSelect}
+        onTap={onSelect}
+        onDragEnd={(event) => {
+          onChange({
+            ...block,
+            x: Math.round(event.target.x()),
+            y: Math.round(event.target.y()),
+          });
+        }}
+        onTransformEnd={() => {
+          const node = rectRef.current;
+          if (!node) return;
+          const width = Math.max(160, node.width() * node.scaleX());
+          node.scaleX(1);
+          node.scaleY(1);
+          onChange({
+            ...block,
+            x: Math.round(node.x()),
+            y: Math.round(node.y()),
+            w: Math.round(width),
+          });
+        }}
+      />
+      <Text
+        x={block.x + block.padding}
+        y={block.y + block.padding}
+        width={Math.max(40, block.w - block.padding * 2)}
+        text={block.text || ' '}
+        fontFamily={block.fontFamily}
+        fontSize={block.fontSize}
+        fontStyle={block.fontWeight}
+        fill={block.textColor}
+        opacity={block.opacity}
+        align="center"
+        verticalAlign="middle"
+        lineHeight={1.16}
+        listening={false}
+      />
+      {isSelected ? (
+        <Transformer
+          ref={transformerRef}
+          rotateEnabled={false}
+          enabledAnchors={['middle-left', 'middle-right']}
+          boundBoxFunc={(_oldBox, newBox) => ({
+            ...newBox,
+            width: Math.max(160, Math.abs(newBox.width)),
+          })}
+        />
+      ) : null}
+    </>
+  );
+}
+
 function fitImageToFrame(image: HTMLImageElement, frame: PptFrameConfig) {
   const sourceRatio = image.width / image.height;
   const targetRatio = frame.w / frame.h;
@@ -341,12 +434,14 @@ function App() {
   const [pptPageData, setPptPageData] = useState<PptPageData>({});
   const [selectedOutputIndex, setSelectedOutputIndex] = useState(0);
   const [selectedFrameId, setSelectedFrameId] = useState<string | null>(null);
+  const [selectedTextId, setSelectedTextId] = useState<string | null>(null);
   const [status, setStatus] = useState(initialDraft?.status ?? '就绪');
   const [zoom, setZoom] = useState(0.46);
   const [batchDialog, setBatchDialog] = useState({ open: false, count: 2, pageStep: 2 });
 
   const selectedOutput = template.outputs[selectedOutputIndex] ?? template.outputs[0];
   const selectedFrame = selectedOutput?.frames.find((frame) => frame.id === selectedFrameId) ?? null;
+  const selectedText = selectedOutput?.textBlocks.find((block) => block.id === selectedTextId) ?? null;
   const validation = useMemo(() => validateTemplate(template), [template]);
   const missingAssets = useMemo(
     () => template.assets.filter((asset) => !assetData[asset.id]).map((asset) => asset.id),
@@ -378,6 +473,7 @@ function App() {
     setPptPageData({});
     setSelectedOutputIndex(0);
     setSelectedFrameId(null);
+    setSelectedTextId(null);
     setStatus('已新建空白模板');
   }
 
@@ -397,6 +493,14 @@ function App() {
     });
   }
 
+  function updateSelectedText(block: TextBlockConfig) {
+    if (!selectedOutput) return;
+    updateOutput({
+      ...selectedOutput,
+      textBlocks: selectedOutput.textBlocks.map((item) => (item.id === block.id ? block : item)),
+    });
+  }
+
   function addCanvas() {
     if (template.outputs.length >= MAX_OUTPUTS) {
       setStatus(`已达到 ${MAX_OUTPUTS} 张画布上限`);
@@ -409,6 +513,7 @@ function App() {
     });
     setSelectedOutputIndex(template.outputs.length);
     setSelectedFrameId(null);
+    setSelectedTextId(null);
   }
 
   function duplicateCanvas() {
@@ -420,6 +525,7 @@ function App() {
     });
     setSelectedOutputIndex(template.outputs.length);
     setSelectedFrameId(null);
+    setSelectedTextId(null);
   }
 
   function batchCreate() {
@@ -468,6 +574,7 @@ function App() {
     });
     setSelectedOutputIndex(Math.max(0, selectedOutputIndex - 1));
     setSelectedFrameId(null);
+    setSelectedTextId(null);
   }
 
   function clearCurrentCanvas() {
@@ -481,8 +588,10 @@ function App() {
         color: '#f3efe7',
       },
       frames: [],
+      textBlocks: [],
     });
     setSelectedFrameId(null);
+    setSelectedTextId(null);
     setStatus(`已清空 ${selectedOutput.name}`);
   }
 
@@ -491,6 +600,15 @@ function App() {
     const next = addFrameToOutput(selectedOutput);
     updateOutput(next.output);
     setSelectedFrameId(next.frame.id);
+    setSelectedTextId(null);
+  }
+
+  function addTextBlock() {
+    if (!selectedOutput) return;
+    const next = addTextBlockToOutput(selectedOutput);
+    updateOutput(next.output);
+    setSelectedFrameId(null);
+    setSelectedTextId(next.textBlock.id);
   }
 
   function removeFrame() {
@@ -500,6 +618,15 @@ function App() {
       frames: selectedOutput.frames.filter((frame) => frame.id !== selectedFrameId),
     });
     setSelectedFrameId(null);
+  }
+
+  function removeTextBlock() {
+    if (!selectedOutput || !selectedTextId) return;
+    updateOutput({
+      ...selectedOutput,
+      textBlocks: selectedOutput.textBlocks.filter((block) => block.id !== selectedTextId),
+    });
+    setSelectedTextId(null);
   }
 
   async function handleBackgroundUpload(file: File) {
@@ -603,6 +730,7 @@ function App() {
     setPptPageData({});
     setSelectedOutputIndex(0);
     setSelectedFrameId(null);
+    setSelectedTextId(null);
     setStatus('已导入 JSON。图片素材需要重新上传，或改用 ZIP 导入。');
   }
 
@@ -637,6 +765,7 @@ function App() {
     setPptPageData({});
     setSelectedOutputIndex(0);
     setSelectedFrameId(null);
+    setSelectedTextId(null);
     setStatus('已导入 ZIP 模板包');
   }
 
@@ -691,6 +820,7 @@ function App() {
                 onClick={() => {
                   setSelectedOutputIndex(index);
                   setSelectedFrameId(null);
+                  setSelectedTextId(null);
                 }}
               >
                 <span>{output.name}</span>
@@ -715,7 +845,7 @@ function App() {
             </div>
             <div className="stage-actions">
               <button type="button" onClick={() => setZoom(fitScale)}>适配窗口</button>
-              <button type="button" onClick={() => setSelectedFrameId(null)}>编辑背景</button>
+              <button type="button" onClick={() => { setSelectedFrameId(null); setSelectedTextId(null); }}>编辑背景</button>
               <label className="ghost-button">
                 上传 PPT 图片预览
                 <input hidden multiple type="file" accept="image/*" onChange={(event) => event.target.files && handlePptPreviewUpload(event.target.files)} />
@@ -733,6 +863,7 @@ function App() {
                 />
               </label>
               <button type="button" onClick={() => setStatus('样张验证：请运行 npm run smoke:render 生成 golden-smoke.png')}>样张验证</button>
+              <button type="button" onClick={addTextBlock}>添加艺术字</button>
               <button type="button" className="primary-button" onClick={addFrame}>添加 PPT 框</button>
             </div>
           </div>
@@ -744,7 +875,10 @@ function App() {
               scaleY={stageScale}
               className="konva-stage"
               onMouseDown={(event) => {
-                if (event.target === event.target.getStage()) setSelectedFrameId(null);
+                if (event.target === event.target.getStage()) {
+                  setSelectedFrameId(null);
+                  setSelectedTextId(null);
+                }
               }}
             >
               <Layer>
@@ -764,8 +898,23 @@ function App() {
                     isSelected={frame.id === selectedFrameId}
                     key={frame.id}
                     previewSrc={pptPageData[frame.page]}
-                    onSelect={() => setSelectedFrameId(frame.id)}
+                    onSelect={() => {
+                      setSelectedFrameId(frame.id);
+                      setSelectedTextId(null);
+                    }}
                     onChange={updateSelectedFrame}
+                  />
+                ))}
+                {selectedOutput.textBlocks.map((block) => (
+                  <TextBlockNode
+                    block={block}
+                    isSelected={block.id === selectedTextId}
+                    key={block.id}
+                    onSelect={() => {
+                      setSelectedFrameId(null);
+                      setSelectedTextId(block.id);
+                    }}
+                    onChange={updateSelectedText}
                   />
                 ))}
               </Layer>
@@ -775,16 +924,21 @@ function App() {
 
         <aside className="inspector">
           <div className="panel-heading">
-            <span>{selectedFrame ? 'PPT 框属性' : '画布属性'}</span>
+            <span>{selectedFrame ? 'PPT 框属性' : selectedText ? '艺术字属性' : '画布属性'}</span>
             {selectedFrame ? (
               <div className="panel-heading-actions">
                 <button type="button" onClick={() => setSelectedFrameId(null)}>编辑背景</button>
                 <button type="button" onClick={removeFrame}>删除框</button>
               </div>
+            ) : selectedText ? (
+              <div className="panel-heading-actions">
+                <button type="button" onClick={() => setSelectedTextId(null)}>编辑背景</button>
+                <button type="button" onClick={removeTextBlock}>删除艺术字</button>
+              </div>
             ) : null}
           </div>
 
-          {!selectedFrame ? (
+          {!selectedFrame && !selectedText ? (
             <div className="control-stack">
               <PanelSection title="画布设置">
               <label>
@@ -858,8 +1012,10 @@ function App() {
               )}
               </PanelSection>
             </div>
+          ) : selectedText ? (
+            <TextInspector block={selectedText} onChange={updateSelectedText} onRemove={removeTextBlock} />
           ) : (
-            <FrameInspector frame={selectedFrame} onChange={updateSelectedFrame} />
+            <FrameInspector frame={selectedFrame!} onChange={updateSelectedFrame} />
           )}
         </aside>
       </section>
@@ -1041,6 +1197,73 @@ function Range({
       {label} <small>{typeof value === 'number' ? value.toFixed(step < 1 ? 2 : 0) : value}</small>
       <input type="range" min={0} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} />
     </label>
+  );
+}
+
+function TextInspector({
+  block,
+  onChange,
+  onRemove,
+}: {
+  block: TextBlockConfig;
+  onChange: (block: TextBlockConfig) => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="control-stack">
+      <PanelSection title="固定文案">
+        <label>
+          文案
+          <textarea
+            rows={3}
+            value={block.text}
+            onChange={(event) => onChange({ ...block, text: event.target.value })}
+          />
+        </label>
+        <button type="button" onClick={onRemove}>删除艺术字</button>
+      </PanelSection>
+      <PanelSection title="位置尺寸">
+        <div className="two-cols">
+          <label>X<input type="number" value={block.x} onChange={(event) => onChange({ ...block, x: Number(event.target.value) })} /></label>
+          <label>Y<input type="number" value={block.y} onChange={(event) => onChange({ ...block, y: Number(event.target.value) })} /></label>
+        </div>
+        <label>
+          宽度
+          <input
+            type="number"
+            min={160}
+            value={block.w}
+            onChange={(event) => onChange({ ...block, w: Math.max(160, Number(event.target.value) || 160) })}
+          />
+        </label>
+      </PanelSection>
+      <PanelSection title="颜色与字形">
+        <label>
+          文字颜色
+          <input type="color" value={block.textColor} onChange={(event) => onChange({ ...block, textColor: event.target.value })} />
+        </label>
+        <label>
+          底色
+          <input type="color" value={block.backgroundColor} onChange={(event) => onChange({ ...block, backgroundColor: event.target.value })} />
+        </label>
+        <Range label="底色透明度" max={1} step={0.01} value={block.backgroundOpacity} onChange={(value) => onChange({ ...block, backgroundOpacity: value })} />
+        <Range label="整体透明度" max={1} step={0.01} value={block.opacity} onChange={(value) => onChange({ ...block, opacity: value })} />
+        <label>
+          字号
+          <input
+            type="number"
+            min={12}
+            max={220}
+            value={block.fontSize}
+            onChange={(event) => onChange({ ...block, fontSize: Math.max(12, Math.min(220, Number(event.target.value) || 12)) })}
+          />
+        </label>
+      </PanelSection>
+      <PanelSection title="外观">
+        <Range label="内边距" max={80} value={block.padding} onChange={(value) => onChange({ ...block, padding: value })} />
+        <Range label="圆角" max={80} value={block.radius} onChange={(value) => onChange({ ...block, radius: value })} />
+      </PanelSection>
+    </div>
   );
 }
 

@@ -84,6 +84,24 @@ export const pptFrameConfigSchema = z.object({
   }),
 });
 
+export const textBlockConfigSchema = z.object({
+  id: z.string().min(1),
+  type: z.literal('fixed_text'),
+  text: z.string(),
+  x: z.number().finite(),
+  y: z.number().finite(),
+  w: z.number().positive(),
+  fontSize: z.number().min(12).max(220),
+  fontFamily: z.string().min(1),
+  fontWeight: z.string().min(1),
+  textColor: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  backgroundColor: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  backgroundOpacity: z.number().min(0).max(1),
+  padding: z.number().min(0).max(120),
+  radius: z.number().min(0).max(120),
+  opacity: z.number().min(0).max(1),
+});
+
 export const canvasOutputSchema = z.object({
   index: z.number().int().positive(),
   name: z.string().min(1),
@@ -94,6 +112,7 @@ export const canvasOutputSchema = z.object({
   }),
   background: backgroundConfigSchema,
   frames: z.array(pptFrameConfigSchema),
+  textBlocks: z.array(textBlockConfigSchema).default([]),
 });
 
 export const templatePackageSchema = z
@@ -158,4 +177,5 @@ export type CanvasOutput = z.infer<typeof canvasOutputSchema>;
 export type CanvasRatio = z.infer<typeof canvasRatioSchema>;
 export type FitMode = z.infer<typeof fitModeSchema>;
 export type PptFrameConfig = z.infer<typeof pptFrameConfigSchema>;
+export type TextBlockConfig = z.infer<typeof textBlockConfigSchema>;
 export type TemplatePackage = z.infer<typeof templatePackageSchema>;

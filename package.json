@@ -1,5 +1,5 @@
 {
-  "name": "ppt-social-template-studio",
+  "name": "pintumuban",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -9,7 +9,8 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
-    "smoke:render": "tsx scripts/smoke-render.ts"
+    "smoke:render": "tsx scripts/smoke-render.ts",
+    "export:notes": "tsx scripts/export-ppt-notes.ts"
   },
   "dependencies": {
     "jszip": "^3.10.1",

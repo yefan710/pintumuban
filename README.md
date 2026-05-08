@@ -1,49 +1,97 @@
-# PPT 社媒拼图模板设计器
+﻿# Pintumuban: PPT Template Studio + Exporter
 
-一个本地运行的 PPT 社媒拼图模板编辑器。它只负责定义模板和导出模板包，不负责完整 PPT 转图或社媒发布。
+A local tool for making social-image templates from PPT pages, then exporting PPT slides into the template regions as final PNG notes.
 
-## 本机启动
+It has two parts:
 
-```bash
+- **Template Studio**: a browser editor for building reusable layout templates.
+- **PPT Export Workflow**: a Node CLI that uses PowerPoint/WPS COM export on Windows, renders selected PPT pages into the template frames, and writes final `collage.png` outputs.
+
+## Requirements
+
+- Windows
+- Node.js 20.19+
+- Microsoft PowerPoint or WPS Presentation
+- Python 3 with `pywin32` available for COM automation
+
+## Install
+
+```powershell
+git clone https://github.com/yefan710/pintumuban.git
+cd pintumuban
 npm install
+```
+
+## Start the Template Studio
+
+```powershell
 npm run dev
 ```
 
-## 另一台电脑迁移
-
-```bash
-git clone <repo-url>
-cd ppt-social-template-studio
-npm install
-npm run dev
-```
-
-模板迁移使用 ZIP：
+Open the local URL printed by Vite, usually:
 
 ```text
-template-name.zip
-  template.json
-  assets/
+http://localhost:5173/
 ```
 
-导出的 `template.json` 不会包含 `/Users/admin/...` 这类本机绝对路径。
+## Make a Template
 
-## 关键命令
+1. Choose the canvas ratio: `9:16`, `3:4`, or `1:1`.
+2. Set a background: solid color, uploaded image, or a PPT page preview.
+3. Add PPT frames. Each frame has a fixed PPT page number, size, position, fit mode, border, radius, shadow, and blend mode.
+4. Add fixed art text if needed. The text block supports text content, text color, background color, opacity, font size, padding, radius, and drag/resize on canvas.
+5. Export the template as JSON or ZIP.
 
-```bash
-npm run test
+The exported template stores page bindings and art text in `template.json`. It does not store local absolute paths.
+
+## Export PPT Notes
+
+Template frames decide which PPT pages are placed into which regions. For example, if a frame is bound to page `3`, the exporter will use `page_003.png` from the PPT export.
+
+```powershell
+npm run export:notes -- `
+  --input "D:\path\to\ppt-folder" `
+  --template "D:\path\to\template.json" `
+  --output "D:\path\to\output-folder" `
+  --timeout-seconds 180
+```
+
+Output format:
+
+```text
+output-folder/
+  PPT file name/
+    collage.png
+    page_001.png
+    page_002.png
+    page_003.png
+    ...
+  summary.json
+```
+
+Behavior:
+
+- Each PPT/PPTX gets one folder.
+- PPT slides are exported as `page_###.png` at 1920x1080.
+- Template outputs whose referenced page numbers exist are rendered into `collage.png`.
+- If a folder already contains `page_###.png`, those files are reused and only `collage.png` is regenerated.
+- Failed PPT files are recorded in `summary.json` and do not stop the batch.
+
+## Useful Commands
+
+```powershell
+npm run dev
 npm run build
+npm run test
 npm run smoke:render
+npm run export:notes -- --help
 ```
 
-`npm run smoke:render` 会读取 `templates/sample-template.json`，用占位 PPT 页面生成 `output/golden-smoke.png`。这是模板合同的第一道验证。
+## Delivery Notes
 
-## V1 能力
+For another machine, send either:
 
-- 画布比例：`9:16`、`3:4`、`1:1`
-- PPT 框默认 `16:9`，锁比例缩放
-- 固定页码绑定
-- 背景颜色、上传背景图、blur、opacity、overlay
-- 框 opacity、feather、blend mode、radius、shadow、border
-- 单张画布起步，支持复制和批量创建
-- JSON / ZIP 导入导出
+- the repository plus a `template.json`; or
+- a ZIP exported from Template Studio, which contains `template.json` and any image assets.
+
+Then run `npm run export:notes` with the template path and the PPT folder.
