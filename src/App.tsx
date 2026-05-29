@@ -1,9 +1,10 @@
 import JSZip from 'jszip';
 import Konva from 'konva';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
-import { Group, Image as KonvaImage, Layer, Rect, Stage, Text, Transformer } from 'react-konva';
+import type { ReactNode, RefObject } from 'react';
+import { Circle, Group, Image as KonvaImage, Layer, Line, Rect, Shape, Stage, Text, Transformer } from 'react-konva';
 import './App.css';
+import { estimateTextBlockHeight, resolveTextBlockColors, type PixelSample } from './domain/autoTextColors';
 import {
   addFrameToOutput,
   addTextBlockToOutput,
@@ -11,10 +12,17 @@ import {
   createTemplateGroup,
   duplicateOutput,
   getCanvasSize,
+  inferBatchPageStep,
+  lockFrameRatio,
   MAX_OUTPUTS,
+  movePerspectiveFrame,
   PPT_RATIO,
+  unlockFramePerspective,
+  updatePerspectiveCorner,
   validateTemplate,
 } from './domain/template';
+import { drawImageInQuad, rectToCorners } from './renderer/perspective';
+import type { QuadCorners } from './renderer/perspective';
 import type {
   AssetRef,
   BackgroundConfig,
@@ -48,6 +56,7 @@ const blendModeLabels: Record<(typeof blendModes)[number], string> = {
   overlay: '叠加',
   'soft-light': '柔光',
 };
+const cornerKeys: Array<keyof QuadCorners> = ['topLeft', 'topRight', 'bottomRight', 'bottomLeft'];
 
 function makeAssetId() {
   return `asset_${crypto.randomUUID().slice(0, 8)}`;
@@ -207,13 +216,114 @@ function PptFrameNode({
   const previewImage = useImageSource(previewSrc);
 
   useEffect(() => {
-    if (isSelected && rectRef.current && transformerRef.current) {
+    if (frame.transformMode === 'locked' && isSelected && rectRef.current && transformerRef.current) {
       transformerRef.current.nodes([rectRef.current]);
       transformerRef.current.getLayer()?.batchDraw();
     }
-  }, [isSelected]);
+  }, [frame.transformMode, isSelected]);
 
   const previewRect = previewImage ? fitImageToFrame(previewImage, frame) : null;
+  const corners = frame.corners ?? rectToCorners(frame.x, frame.y, frame.w, frame.h);
+  const cornerPoints = cornersToPoints(corners);
+  const isPerspective = frame.transformMode === 'perspective';
+
+  if (isPerspective) {
+    return (
+      <>
+        <Line
+          points={cornerPoints}
+          closed
+          fill="#ffffff"
+          opacity={0.01}
+          shadowEnabled={frame.shadow.enabled}
+          shadowColor={frame.shadow.color}
+          shadowBlur={frame.shadow.blur}
+          shadowOffsetX={frame.shadow.x}
+          shadowOffsetY={frame.shadow.y}
+          shadowOpacity={frame.shadow.opacity}
+          listening={false}
+        />
+        {previewImage ? (
+          <Shape
+            sceneFunc={(context) => {
+              const nativeContext = (context as unknown as { _context: CanvasRenderingContext2D })._context;
+              drawImageInQuad(
+                nativeContext,
+                previewImage,
+                previewImage.width,
+                previewImage.height,
+                corners,
+                {
+                  opacity: frame.opacity,
+                  blendMode: toCanvasCompositeOperation(frame.blendMode),
+                  subdivisions: 18,
+                },
+              );
+            }}
+            listening={false}
+          />
+        ) : (
+          <Line points={cornerPoints} closed fill="#ffffff" opacity={frame.opacity} listening={false} />
+        )}
+        <Line
+          points={cornerPoints}
+          closed
+          fill="rgba(255,255,255,0.01)"
+          stroke={frame.border.enabled ? frame.border.color : '#0b6bcb'}
+          strokeWidth={frame.border.enabled ? frame.border.width : isSelected ? 3 : 1}
+          dash={frame.border.enabled ? undefined : [10, 8]}
+          draggable
+          onClick={onSelect}
+          onTap={onSelect}
+          onDragMove={(event) => {
+            const dx = event.target.x();
+            const dy = event.target.y();
+            event.target.position({ x: 0, y: 0 });
+            onChange(movePerspectiveFrame(frame, Math.round(frame.x + dx), Math.round(frame.y + dy)));
+          }}
+          onDragEnd={(event) => {
+            const dx = event.target.x();
+            const dy = event.target.y();
+            event.target.position({ x: 0, y: 0 });
+            if (dx !== 0 || dy !== 0) {
+              onChange(movePerspectiveFrame(frame, Math.round(frame.x + dx), Math.round(frame.y + dy)));
+            }
+          }}
+        />
+        <Text
+          x={frame.x + 12}
+          y={frame.y + 12}
+          text={`P${frame.page} · 四点`}
+          fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
+          fontSize={18}
+          fill="#0b4f71"
+          listening={false}
+        />
+        {isSelected
+          ? cornerKeys.map((key) => (
+              <Circle
+                key={key}
+                x={corners[key].x}
+                y={corners[key].y}
+                radius={10}
+                fill="#ffffff"
+                stroke="#00a6a6"
+                strokeWidth={3}
+                draggable
+                onClick={onSelect}
+                onTap={onSelect}
+                onDragMove={(event) => {
+                  onChange(updatePerspectiveCorner(frame, key, {
+                    x: Math.round(event.target.x()),
+                    y: Math.round(event.target.y()),
+                  }));
+                }}
+              />
+            ))
+          : null}
+      </>
+    );
+  }
 
   return (
     <>
@@ -318,19 +428,25 @@ function PptFrameNode({
 function TextBlockNode({
   block,
   isSelected,
+  sampleLayerRef,
+  sampleVersion,
   onChange,
   onSelect,
 }: {
   block: TextBlockConfig;
   isSelected: boolean;
+  sampleLayerRef: RefObject<Konva.Layer | null>;
+  sampleVersion: number;
   onChange: (block: TextBlockConfig) => void;
   onSelect: () => void;
 }) {
   const rectRef = useRef<Konva.Rect>(null);
   const transformerRef = useRef<Konva.Transformer>(null);
-  const lineHeight = block.fontSize * 1.16;
-  const estimatedLines = Math.max(1, Math.ceil(block.text.length / Math.max(1, Math.floor(block.w / (block.fontSize * 0.9)))));
-  const height = Math.round(block.padding * 2 + estimatedLines * lineHeight);
+  const height = estimateTextBlockHeight(block);
+  const [resolvedColors, setResolvedColors] = useState(() => ({
+    backgroundColor: block.backgroundColor,
+    textColor: block.textColor,
+  }));
 
   useEffect(() => {
     if (isSelected && rectRef.current && transformerRef.current) {
@@ -338,6 +454,33 @@ function TextBlockNode({
       transformerRef.current.getLayer()?.batchDraw();
     }
   }, [isSelected]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const frame = window.requestAnimationFrame(() => {
+      const canvas = sampleLayerRef.current?.toCanvas({ pixelRatio: 1 });
+      const context = canvas?.getContext('2d', { willReadFrequently: true });
+      let sample: PixelSample | null = null;
+      if (canvas && context) {
+        sample = {
+          width: canvas.width,
+          height: canvas.height,
+          data: context.getImageData(0, 0, canvas.width, canvas.height).data,
+        };
+      }
+      const next = resolveTextBlockColors(block, sample, { boxHeight: height });
+      if (!cancelled) {
+        setResolvedColors({
+          backgroundColor: next.backgroundColor,
+          textColor: next.textColor,
+        });
+      }
+    });
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(frame);
+    };
+  }, [block, height, sampleLayerRef, sampleVersion]);
 
   return (
     <>
@@ -347,7 +490,7 @@ function TextBlockNode({
         y={block.y}
         width={block.w}
         height={height}
-        fill={block.backgroundColor}
+        fill={resolvedColors.backgroundColor}
         opacity={block.backgroundOpacity * block.opacity}
         cornerRadius={block.radius}
         stroke={isSelected ? '#00a6a6' : undefined}
@@ -384,7 +527,7 @@ function TextBlockNode({
         fontFamily={block.fontFamily}
         fontSize={block.fontSize}
         fontStyle={block.fontWeight}
-        fill={block.textColor}
+        fill={resolvedColors.textColor}
         opacity={block.opacity}
         align="center"
         verticalAlign="middle"
@@ -427,6 +570,26 @@ function fitImageToFrame(image: HTMLImageElement, frame: PptFrameConfig) {
   };
 }
 
+function cornersToPoints(corners: QuadCorners) {
+  return [
+    corners.topLeft.x,
+    corners.topLeft.y,
+    corners.topRight.x,
+    corners.topRight.y,
+    corners.bottomRight.x,
+    corners.bottomRight.y,
+    corners.bottomLeft.x,
+    corners.bottomLeft.y,
+  ];
+}
+
+function toCanvasCompositeOperation(blendMode: PptFrameConfig['blendMode']): GlobalCompositeOperation {
+  if (blendMode === 'normal') {
+    return 'source-over';
+  }
+  return blendMode;
+}
+
 function App() {
   const [initialDraft] = useState(() => readInitialDraft());
   const [template, setTemplate] = useState<TemplatePackage>(() => initialDraft?.template ?? createTemplateGroup());
@@ -438,6 +601,8 @@ function App() {
   const [status, setStatus] = useState(initialDraft?.status ?? '就绪');
   const [zoom, setZoom] = useState(0.46);
   const [batchDialog, setBatchDialog] = useState({ open: false, count: 2, pageStep: 2 });
+  const baseLayerRef = useRef<Konva.Layer>(null);
+  const [sampleVersion, setSampleVersion] = useState(0);
 
   const selectedOutput = template.outputs[selectedOutputIndex] ?? template.outputs[0];
   const selectedFrame = selectedOutput?.frames.find((frame) => frame.id === selectedFrameId) ?? null;
@@ -459,6 +624,16 @@ function App() {
       console.warn('Local draft save failed. Export ZIP to keep a copy of this template.', error);
     }
   }, [assetData, template]);
+
+  useEffect(() => {
+    const timers = [40, 180, 520].map((delay) => window.setTimeout(() => {
+      baseLayerRef.current?.batchDraw();
+      setSampleVersion((version) => version + 1);
+    }, delay));
+    return () => {
+      timers.forEach((timer) => window.clearTimeout(timer));
+    };
+  }, [assetData, pptPageData, selectedOutput]);
 
   function updateTemplate(next: TemplatePackage) {
     setTemplate(next);
@@ -529,7 +704,7 @@ function App() {
   }
 
   function batchCreate() {
-    setBatchDialog({ open: true, count: 2, pageStep: 2 });
+    setBatchDialog({ open: true, count: 2, pageStep: selectedOutput ? inferBatchPageStep(selectedOutput) : 1 });
   }
 
   function confirmBatchCreate() {
@@ -881,7 +1056,7 @@ function App() {
                 }
               }}
             >
-              <Layer>
+              <Layer ref={baseLayerRef}>
                 {selectedOutput.background.type === 'color' ? (
                   <Rect width={canvasSize.width} height={canvasSize.height} fill={selectedOutput.background.color} />
                 ) : (
@@ -905,11 +1080,15 @@ function App() {
                     onChange={updateSelectedFrame}
                   />
                 ))}
+              </Layer>
+              <Layer>
                 {selectedOutput.textBlocks.map((block) => (
                   <TextBlockNode
                     block={block}
                     isSelected={block.id === selectedTextId}
                     key={block.id}
+                    sampleLayerRef={baseLayerRef}
+                    sampleVersion={sampleVersion}
                     onSelect={() => {
                       setSelectedFrameId(null);
                       setSelectedTextId(block.id);
@@ -1239,12 +1418,30 @@ function TextInspector({
       </PanelSection>
       <PanelSection title="颜色与字形">
         <label>
+          配色模式
+          <select
+            value={block.colorMode}
+            onChange={(event) => onChange({ ...block, colorMode: event.target.value as TextBlockConfig['colorMode'] })}
+          >
+            <option value="autoAccent">自动强调色</option>
+            <option value="fixed">固定颜色</option>
+          </select>
+        </label>
+        <label>
           文字颜色
-          <input type="color" value={block.textColor} onChange={(event) => onChange({ ...block, textColor: event.target.value })} />
+          <input
+            type="color"
+            value={block.textColor}
+            onChange={(event) => onChange({ ...block, colorMode: 'fixed', textColor: event.target.value })}
+          />
         </label>
         <label>
           底色
-          <input type="color" value={block.backgroundColor} onChange={(event) => onChange({ ...block, backgroundColor: event.target.value })} />
+          <input
+            type="color"
+            value={block.backgroundColor}
+            onChange={(event) => onChange({ ...block, colorMode: 'fixed', backgroundColor: event.target.value })}
+          />
         </label>
         <Range label="底色透明度" max={1} step={0.01} value={block.backgroundOpacity} onChange={(value) => onChange({ ...block, backgroundOpacity: value })} />
         <Range label="整体透明度" max={1} step={0.01} value={block.opacity} onChange={(value) => onChange({ ...block, opacity: value })} />
@@ -1268,6 +1465,7 @@ function TextInspector({
 }
 
 function FrameInspector({ frame, onChange }: { frame: PptFrameConfig; onChange: (frame: PptFrameConfig) => void }) {
+  const isPerspective = frame.transformMode === 'perspective';
   return (
     <div className="control-stack">
       <PanelSection title="页码与适配">
@@ -1281,17 +1479,49 @@ function FrameInspector({ frame, onChange }: { frame: PptFrameConfig; onChange: 
           onChange={(event) => onChange({ ...frame, page: Math.max(1, Math.round(Number(event.target.value) || 1)) })}
         />
       </label>
+      <button
+        type="button"
+        className={isPerspective ? 'primary-button' : undefined}
+        onClick={() => onChange(isPerspective ? lockFrameRatio(frame) : unlockFramePerspective(frame))}
+      >
+        {isPerspective ? '锁定 PPT 比例' : '解锁四点变形'}
+      </button>
       <label>
         适配方式
-        <select value={frame.fit} onChange={(event) => onChange({ ...frame, fit: event.target.value as FitMode })}>
+        <select
+          value={frame.fit}
+          disabled={isPerspective}
+          onChange={(event) => onChange({ ...frame, fit: event.target.value as FitMode })}
+        >
           {fitModes.map((mode) => <option key={mode} value={mode}>{fitLabels[mode]}</option>)}
         </select>
       </label>
+      {isPerspective ? <p className="hint ok">四点模式会完整透视贴入 PPT 页面，暂不使用适配方式和圆角。</p> : null}
       </PanelSection>
       <PanelSection title="位置尺寸">
       <div className="two-cols">
-        <label>X<input type="number" value={frame.x} onChange={(event) => onChange({ ...frame, x: Number(event.target.value) })} /></label>
-        <label>Y<input type="number" value={frame.y} onChange={(event) => onChange({ ...frame, y: Number(event.target.value) })} /></label>
+        <label>
+          X
+          <input
+            type="number"
+            value={frame.x}
+            onChange={(event) => {
+              const x = Number(event.target.value);
+              onChange(isPerspective ? movePerspectiveFrame(frame, x, frame.y) : { ...frame, x });
+            }}
+          />
+        </label>
+        <label>
+          Y
+          <input
+            type="number"
+            value={frame.y}
+            onChange={(event) => {
+              const y = Number(event.target.value);
+              onChange(isPerspective ? movePerspectiveFrame(frame, frame.x, y) : { ...frame, y });
+            }}
+          />
+        </label>
       </div>
       <label>
         宽度
@@ -1299,6 +1529,7 @@ function FrameInspector({ frame, onChange }: { frame: PptFrameConfig; onChange: 
           type="number"
           min={120}
           value={frame.w}
+          disabled={isPerspective}
           onChange={(event) => {
             const width = Math.max(120, Number(event.target.value) || 120);
             onChange({ ...frame, w: width, h: Math.round(width / PPT_RATIO) });
@@ -1315,7 +1546,7 @@ function FrameInspector({ frame, onChange }: { frame: PptFrameConfig; onChange: 
           {blendModes.map((mode) => <option key={mode} value={mode}>{blendModeLabels[mode]}</option>)}
         </select>
       </label>
-      <Range label="圆角" max={80} value={frame.radius} onChange={(value) => onChange({ ...frame, radius: value })} />
+      {!isPerspective ? <Range label="圆角" max={80} value={frame.radius} onChange={(value) => onChange({ ...frame, radius: value })} /> : null}
       </PanelSection>
       <PanelSection title="阴影与边框">
       <label className="toggle">

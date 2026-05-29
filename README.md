@@ -39,10 +39,11 @@ http://localhost:5173/
 1. Choose the canvas ratio: `9:16`, `3:4`, or `1:1`.
 2. Set a background: solid color, uploaded image, or a PPT page preview.
 3. Add PPT frames. Each frame has a fixed PPT page number, size, position, fit mode, border, radius, shadow, and blend mode.
-4. Add fixed art text if needed. The text block supports text content, text color, background color, opacity, font size, padding, radius, and drag/resize on canvas.
-5. Export the template as JSON or ZIP.
+4. For perspective mockups, select a PPT frame and click **Unlock four-point transform**. The frame changes from the locked PPT ratio into four draggable corners, so the exported PPT page can be pasted into a tilted template area.
+5. Add fixed art text if needed. The text block supports text content, color mode, text color, background color, opacity, font size, padding, radius, and drag/resize on canvas. `fixed` keeps the saved colors; `autoAccent` marks the block for background-aware accent colors in compatible export workflows.
+6. Export the template as JSON or ZIP.
 
-The exported template stores page bindings and art text in `template.json`. It does not store local absolute paths.
+The exported template stores page bindings, optional four-point frame corners, and art text in `template.json`. It does not store local absolute paths. Older templates continue to open as locked-ratio PPT frames and fixed-color art text by default.
 
 ## Export PPT Notes
 
@@ -62,6 +63,8 @@ Output format:
 output-folder/
   PPT file name/
     collage.png
+    note_001.png
+    note_002.png
     page_001.png
     page_002.png
     page_003.png
@@ -73,8 +76,8 @@ Behavior:
 
 - Each PPT/PPTX gets one folder.
 - PPT slides are exported as `page_###.png` at 1920x1080.
-- Template outputs whose referenced page numbers exist are rendered into `collage.png`.
-- If a folder already contains `page_###.png`, those files are reused and only `collage.png` is regenerated.
+- Template outputs whose referenced page numbers exist are rendered as `note_###.png`, then combined into `collage.png`.
+- If a folder already contains `page_###.png`, those files are reused and only `note_###.png` plus `collage.png` are regenerated.
 - Failed PPT files are recorded in `summary.json` and do not stop the batch.
 
 ## Useful Commands

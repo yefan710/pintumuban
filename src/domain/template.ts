@@ -1,4 +1,6 @@
 import { templatePackageSchema, type CanvasOutput, type CanvasRatio, type PptFrameConfig, type TemplatePackage, type TextBlockConfig } from '../schema/template.schema';
+import { getCornersBounds, lockRectFromCorners, rectToCorners, translateCorners } from '../renderer/perspective';
+import type { QuadCorners } from '../renderer/perspective';
 
 export const MAX_OUTPUTS = 18;
 export const PPT_RATIO = 16 / 9;
@@ -74,6 +76,7 @@ export function createFrame(page: number, x = 90, y = 120, w = 720): PptFrameCon
     w,
     h: Math.round(w / PPT_RATIO),
     sourceRatio: '16:9',
+    transformMode: 'locked',
     fit: 'contain',
     opacity: 1,
     feather: 0,
@@ -118,12 +121,67 @@ export function createTextBlock(x = 90, y = 84, w = 900): TextBlockConfig {
     fontSize: 64,
     fontFamily: 'PingFang SC, Noto Sans SC, Source Han Sans SC, Microsoft YaHei, sans-serif',
     fontWeight: '900',
+    colorMode: 'autoAccent',
     textColor: '#ffffff',
     backgroundColor: '#0b4f71',
     backgroundOpacity: 0.82,
     padding: 28,
     radius: 24,
     opacity: 1,
+  };
+}
+
+export function unlockFramePerspective(frame: PptFrameConfig): PptFrameConfig {
+  const corners = frame.corners ?? rectToCorners(frame.x, frame.y, frame.w, frame.h);
+  const bounds = getCornersBounds(corners);
+  return {
+    ...frame,
+    ...bounds,
+    transformMode: 'perspective',
+    corners,
+  };
+}
+
+export function lockFrameRatio(frame: PptFrameConfig): PptFrameConfig {
+  const rect = lockRectFromCorners(frame.corners ?? rectToCorners(frame.x, frame.y, frame.w, frame.h), PPT_RATIO);
+  return {
+    ...frame,
+    ...rect,
+    h: Math.round(rect.w / PPT_RATIO),
+    transformMode: 'locked',
+    corners: undefined,
+  };
+}
+
+export function movePerspectiveFrame(frame: PptFrameConfig, x: number, y: number): PptFrameConfig {
+  const corners = frame.corners ?? rectToCorners(frame.x, frame.y, frame.w, frame.h);
+  const dx = x - frame.x;
+  const dy = y - frame.y;
+  return syncFrameBounds({
+    ...frame,
+    corners: translateCorners(corners, dx, dy),
+  });
+}
+
+export function updatePerspectiveCorner(frame: PptFrameConfig, key: keyof QuadCorners, point: { x: number; y: number }): PptFrameConfig {
+  const corners = frame.corners ?? rectToCorners(frame.x, frame.y, frame.w, frame.h);
+  return syncFrameBounds({
+    ...frame,
+    transformMode: 'perspective',
+    corners: {
+      ...corners,
+      [key]: point,
+    },
+  });
+}
+
+function syncFrameBounds(frame: PptFrameConfig): PptFrameConfig {
+  if (frame.transformMode !== 'perspective' || !frame.corners) {
+    return frame;
+  }
+  return {
+    ...frame,
+    ...getCornersBounds(frame.corners),
   };
 }
 
@@ -170,6 +228,14 @@ export function duplicateOutput(output: CanvasOutput, index: number, pageOffset:
       id: makeId('text'),
     })),
   };
+}
+
+export function inferBatchPageStep(output: CanvasOutput) {
+  if (output.frames.length === 0) {
+    return 1;
+  }
+  const pages = output.frames.map((frame) => frame.page);
+  return Math.max(1, Math.max(...pages) - Math.min(...pages) + 1);
 }
 
 export function batchDuplicateOutput(output: CanvasOutput, startIndex: number, count: number, pageStep: number) {

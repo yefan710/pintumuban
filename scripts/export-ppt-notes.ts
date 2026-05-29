@@ -3,7 +3,9 @@ import { access, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from '
 import { tmpdir } from 'node:os';
 import { basename, extname, join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
+import { resolveTextBlockColors } from '../src/domain/autoTextColors.ts';
 import { fitRect } from '../src/renderer/geometry.ts';
+import { drawImageInQuad, rectToCorners } from '../src/renderer/perspective.ts';
 import {
   templatePackageSchema,
   type BackgroundConfig,
@@ -12,8 +14,6 @@ import {
   type TextBlockConfig,
 } from '../src/schema/template.schema.ts';
 
-const EXPORT_WIDTH = 1920;
-const EXPORT_HEIGHT = 1080;
 const PPT_EXTENSIONS = new Set(['.ppt', '.pptx']);
 
 interface CliArgs {
@@ -41,7 +41,8 @@ function printHelp() {
   tsx scripts/export-ppt-notes.ts --input <ppt-folder> --template <template-json> --output <output-folder> [--timeout-seconds 180]
 
 Exports each PPT/PPTX to page_###.png images and renders collage.png with the template.
-If page_###.png files already exist in an output folder, they are reused and only collage.png is regenerated.`);
+Each rendered template output is also written as note_###.png.
+If page_###.png files already exist in an output folder, they are reused and only rendered note images are regenerated.`);
 }
 
 function parseArgs(argv: string[]): CliArgs | null {
@@ -85,7 +86,9 @@ function parseArgs(argv: string[]): CliArgs | null {
 
 function sanitizeFolderName(name: string) {
   const cleaned = name
-    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+    .split('')
+    .map((char) => (char.charCodeAt(0) < 32 || /[<>:"/\\|?*]/.test(char) ? '_' : char))
+    .join('')
     .replace(/[. ]+$/g, '')
     .trim();
   const safeName = cleaned || 'ppt';
@@ -101,6 +104,15 @@ function drawRoundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, w:
   ctx.arcTo(x + w, y + h, x, y + h, r);
   ctx.arcTo(x, y + h, x, y, r);
   ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function drawQuadPath(ctx: CanvasRenderingContext2D, corners: NonNullable<PptFrameConfig['corners']>) {
+  ctx.beginPath();
+  ctx.moveTo(corners.topLeft.x, corners.topLeft.y);
+  ctx.lineTo(corners.topRight.x, corners.topRight.y);
+  ctx.lineTo(corners.bottomRight.x, corners.bottomRight.y);
+  ctx.lineTo(corners.bottomLeft.x, corners.bottomLeft.y);
   ctx.closePath();
 }
 
@@ -129,6 +141,52 @@ async function drawFrame(ctx: CanvasRenderingContext2D, frame: PptFrameConfig, p
   const slide = await loadSlide(pagesFolder, frame.page);
   const sourceWidth = slide.width;
   const sourceHeight = slide.height;
+  const isPerspective = frame.transformMode === 'perspective';
+  const corners = frame.corners ?? rectToCorners(frame.x, frame.y, frame.w, frame.h);
+
+  if (isPerspective) {
+    if (frame.shadow.enabled) {
+      const shadowCanvas = createCanvas(ctx.canvas.width, ctx.canvas.height);
+      const shadowCtx = shadowCanvas.getContext('2d');
+      shadowCtx.save();
+      drawQuadPath(shadowCtx, corners);
+      shadowCtx.shadowOffsetX = frame.shadow.x;
+      shadowCtx.shadowOffsetY = frame.shadow.y;
+      shadowCtx.shadowBlur = frame.shadow.blur;
+      shadowCtx.shadowColor = withAlpha(frame.shadow.color, frame.shadow.opacity);
+      shadowCtx.fillStyle = withAlpha(frame.shadow.color, frame.shadow.opacity);
+      shadowCtx.fill();
+      shadowCtx.globalCompositeOperation = 'destination-out';
+      drawQuadPath(shadowCtx, corners);
+      shadowCtx.fill();
+      shadowCtx.restore();
+      ctx.drawImage(shadowCanvas, 0, 0);
+    }
+
+    drawImageInQuad(
+      ctx as CanvasRenderingContext2D & { canvas: { width: number; height: number } },
+      slide as unknown as CanvasImageSource,
+      sourceWidth,
+      sourceHeight,
+      corners,
+      {
+        opacity: frame.opacity,
+        blendMode: toCompositeOperation(frame.blendMode),
+        subdivisions: 24,
+      },
+    );
+
+    if (frame.border.enabled && frame.border.width > 0) {
+      ctx.save();
+      drawQuadPath(ctx, corners);
+      ctx.globalAlpha = frame.border.opacity;
+      ctx.strokeStyle = frame.border.color;
+      ctx.lineWidth = frame.border.width;
+      ctx.stroke();
+      ctx.restore();
+    }
+    return;
+  }
 
   if (frame.shadow.enabled) {
     const shadowCanvas = createCanvas(ctx.canvas.width, ctx.canvas.height);
@@ -192,14 +250,16 @@ function drawTextBlock(ctx: CanvasRenderingContext2D, block: TextBlockConfig) {
   ctx.font = `${block.fontWeight} ${block.fontSize}px ${block.fontFamily}`;
   const lines = wrapText(ctx, block.text || ' ', innerWidth);
   const height = Math.round(block.padding * 2 + lines.length * lineHeight);
+  const sample = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height);
+  const colors = resolveTextBlockColors(block, sample, { boxHeight: height });
 
   ctx.globalAlpha = block.backgroundOpacity * block.opacity;
-  ctx.fillStyle = block.backgroundColor;
+  ctx.fillStyle = colors.backgroundColor;
   drawRoundedRect(ctx, block.x, block.y, block.w, height, block.radius);
   ctx.fill();
 
   ctx.globalAlpha = block.opacity;
-  ctx.fillStyle = block.textColor;
+  ctx.fillStyle = colors.textColor;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   lines.forEach((line, index) => {
@@ -271,12 +331,18 @@ function referencedPages(output: CanvasOutput) {
   return pages;
 }
 
-async function renderCollage(outputs: CanvasOutput[], pagesFolder: string, collagePath: string) {
+async function renderTemplateImages(outputs: CanvasOutput[], pagesFolder: string) {
   const rendered = new Array<Canvas>();
   for (const output of outputs) {
-    rendered.push(await renderOutput(output, pagesFolder));
+    const canvas = await renderOutput(output, pagesFolder);
+    rendered.push(canvas);
+    const notePath = join(pagesFolder, `note_${String(output.index).padStart(3, '0')}.png`);
+    await writeFile(notePath, canvas.toBuffer('image/png'));
   }
+  return rendered;
+}
 
+async function renderCollage(rendered: Canvas[], collagePath: string) {
   const width = Math.max(...rendered.map((canvas) => canvas.width));
   const height = rendered.reduce((sum, canvas) => sum + canvas.height, 0);
   const collage = createCanvas(width, height);
@@ -499,8 +565,9 @@ async function processPpt(pptPath: string, outputFolder: string, outputs: Canvas
     if (validOutputs.length === 0) {
       warnings.push('No valid template outputs for this slide count; collage skipped.');
     } else {
+      const rendered = await renderTemplateImages(validOutputs, folder);
       const collagePath = join(folder, 'collage.png');
-      await renderCollage(validOutputs, folder, collagePath);
+      await renderCollage(rendered, collagePath);
       if (!(await fileExists(collagePath))) {
         throw new Error('collage.png was not created');
       }
